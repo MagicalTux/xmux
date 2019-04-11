@@ -30,8 +30,6 @@ type Session struct {
 	err       error
 }
 
-var ErrTimeout = errors.New("xmux: timed out")
-
 // New creates a new session over a given io.ReadWriter. Both side must have
 // a different value for "server" (one must be true, the other false). If the
 // connection timeouts for more than 30 seconds and up to 60 seconds, it will
