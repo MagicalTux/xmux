@@ -137,7 +137,7 @@ func (ch *Channel) handle(f *frame) {
 		}
 		ch.outLock.Lock()
 		defer ch.outLock.Unlock()
-		ch.winOut = binary.BigEndian.Uint32(f.payload)
+		ch.winOut += binary.BigEndian.Uint32(f.payload)
 		ch.outCond.Broadcast()
 	case frameData:
 		if f.payload == nil {
@@ -188,9 +188,10 @@ func (ch *Channel) winCalcLk() {
 	}
 
 	// increase winIn
-	ch.winIn = maxWin - uint32(len(ch.bufIn))
+	delta := maxWin - (uint32(len(ch.bufIn)) + ch.winIn)
+	ch.winIn += delta
 	payload := make([]byte, 4)
-	binary.BigEndian.PutUint32(payload, ch.winIn)
+	binary.BigEndian.PutUint32(payload, delta)
 	ch.accepted = true
 
 	if ch.s.closed == 0 {
