@@ -23,8 +23,8 @@ const (
 )
 
 type frame struct {
-	ch      uint32 // channel
 	code    uint8  // code
+	ch      uint32 // channel
 	payload []byte // data
 }
 
@@ -49,14 +49,17 @@ func readFrame(r *bufio.Reader) (*frame, error) {
 		return nil, errors.New("xmux: frame too large")
 	}
 
-	pl := make([]byte, int(l))
+	if l > 0 {
+		pl := make([]byte, int(l))
 
-	_, err = io.ReadFull(r, pl)
-	if err != nil {
-		return nil, err
+		_, err = io.ReadFull(r, pl)
+		if err != nil {
+			return nil, err
+		}
+		return &frame{c, ch, pl}, nil
 	}
 
-	return &frame{ch, c, pl}, nil
+	return &frame{c, ch, nil}, nil
 }
 
 // WriteTo conforms to the right go structure
@@ -70,6 +73,9 @@ func (f *frame) WriteTo(w io.Writer) (int64, error) {
 	n2, err := w.Write(hdr[:5+n])
 	if err != nil {
 		return int64(n2), err
+	}
+	if len(f.payload) == 0 {
+		return int64(n2), nil
 	}
 
 	n3, err := w.Write(f.payload)
