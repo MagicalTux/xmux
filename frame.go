@@ -9,11 +9,13 @@ import (
 
 const (
 	frameOpenChannel = iota // open channel = connect()
+	frameOpenAck            // channel open success
 	frameWinAdjust          // adjust in window for channel
 	frameData               // sending data to channel
 	frameClose              // close channel
 
 	ctrlKeepAlive
+	ctrlError
 )
 
 const (
@@ -27,14 +29,14 @@ type frame struct {
 }
 
 func readFrame(r *bufio.Reader) (*frame, error) {
-	var ch uint32
-	err := binary.Read(r, binary.BigEndian, &ch)
+	var c uint8
+	err := binary.Read(r, binary.BigEndian, &c)
 	if err != nil {
 		return nil, err
 	}
 
-	var c uint8
-	err = binary.Read(r, binary.BigEndian, &c)
+	var ch uint32
+	err = binary.Read(r, binary.BigEndian, &ch)
 	if err != nil {
 		return nil, err
 	}
@@ -55,4 +57,21 @@ func readFrame(r *bufio.Reader) (*frame, error) {
 	}
 
 	return &frame{ch, c, pl}, nil
+}
+
+// WriteTo conforms to the right go structure
+func (f *frame) WriteTo(w io.Writer) (int64, error) {
+	hdr := make([]byte, 5+binary.MaxVarintLen64)
+	hdr[0] = byte(f.code)
+	binary.BigEndian.PutUint32(hdr[1:5], f.ch)
+	n := binary.PutUvarint(hdr[5:], uint64(len(f.payload)))
+
+	// write
+	n2, err := w.Write(hdr[:5+n])
+	if err != nil {
+		return int64(n2), err
+	}
+
+	n3, err := w.Write(f.payload)
+	return int64(n2 + n3), err
 }
