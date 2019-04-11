@@ -62,7 +62,7 @@ func readFrame(r *bufio.Reader) (*frame, error) {
 	return &frame{c, ch, nil}, nil
 }
 
-// WriteTo conforms to the right go structure
+// WriteTo conforms to the appropriate go interface
 func (f *frame) WriteTo(w io.Writer) (int64, error) {
 	hdr := make([]byte, 5+binary.MaxVarintLen64)
 	hdr[0] = byte(f.code)
@@ -74,6 +74,7 @@ func (f *frame) WriteTo(w io.Writer) (int64, error) {
 		return int64(n2), err
 	}
 
+	// if the writer supports writing both buffers in one go, do it
 	if wb, ok := w.(interface{ WriteBuffers(v [][]byte) (int, error) }); ok {
 		n2, err := wb.WriteBuffers([][]byte{hdr, f.payload})
 		return int64(n2), err

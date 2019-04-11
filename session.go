@@ -61,6 +61,7 @@ func (s *Session) AcceptChannel() (*Channel, error) {
 		return nil, io.ErrClosedPipe
 	}
 	s.out <- &frame{frameOpenAck, c.ch, nil}
+	c.winCalc()
 	return c, nil
 }
 

@@ -64,8 +64,21 @@ func TestXmux(t *testing.T) {
 		}
 	}
 
+	nc.Close()
+
 	if totN != 100*1024*1024 {
 		t.Errorf("100MB test didn't return 100 MB")
+	}
+
+	// echo test
+	nc, _ = c.Dial("tcp", "echo")
+	b = make([]byte, 4096)
+
+	nc.Write([]byte("This is a test"))
+	n, _ = nc.Read(b)
+
+	if string(b[:n]) != "This is a test" {
+		t.Errorf("echo test failed, received %v", b[:n])
 	}
 }
 
@@ -86,6 +99,15 @@ func srvTest(t *testing.T, s *Session) {
 				buf := make([]byte, 10*1024*1024) // 10MB
 				for i := 0; i < 10; i++ {
 					c.Write(buf)
+				}
+			case "echo":
+				buf := make([]byte, 4096)
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						break
+					}
+					c.Write(buf[:n])
 				}
 			}
 			c.Close()
