@@ -52,7 +52,7 @@ func New(s io.ReadWriter, server bool) *Session {
 	return res
 }
 
-func (s *Session) Accept() (net.Conn, error) {
+func (s *Session) AcceptChannel() (*Channel, error) {
 	c, ok := <-s.accept
 	if !ok {
 		if s.err != nil {
@@ -61,6 +61,30 @@ func (s *Session) Accept() (net.Conn, error) {
 		return nil, io.ErrClosedPipe
 	}
 	return c, nil
+}
+
+func (s *Session) Accept() (net.Conn, error) {
+	return s.AcceptChannel()
+}
+
+func (s *Session) Dial(network, address string) (net.Conn, error) {
+	return s.DialChannel(network, address)
+}
+
+func (s *Session) DialChannel(network, address string) (*Channel, error) {
+	ep := []byte(network + "\x00" + address)
+
+	cid := atomic.AddUint32(&s.chId, 2) - 2
+	ch := s.newChannel(cid, ep)
+
+	s.chMlk.Lock()
+	s.chMap[cid] = ch
+	s.chMlk.Unlock()
+
+	s.out <- &frame{frameOpenChannel, cid, ep}
+
+	// TODO wait for channel open response
+	return ch, nil
 }
 
 // Addr complies with interface net.Listener and returns local addr if any
