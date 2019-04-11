@@ -3,7 +3,6 @@ package xmux
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"net"
 	"sync"
@@ -28,6 +27,11 @@ type Channel struct {
 	laddr, raddr net.Addr
 
 	closed uint32
+
+	readDeadline  time.Time
+	writeDeadline time.Time
+	setReadDl     chan time.Time
+	setWriteDl    chan time.Time
 }
 
 func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
@@ -36,12 +40,54 @@ func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
 		ch: ch,
 		ep: ep,
 		cl: make(chan struct{}),
+
+		setReadDl:  make(chan time.Time),
+		setWriteDl: make(chan time.Time),
 	}
 
 	res.inCond = sync.NewCond(&res.inLock)
 	res.outCond = sync.NewCond(&res.outLock)
 
 	return res
+}
+
+// chTimeout is a goroutine that will wake channel locks upon reaching any timeout
+func (ch *Channel) chTimeout() {
+	var readDl, writeDl <-chan time.Time
+	var readDlT, writeDlT *time.Timer
+
+	for {
+		select {
+		case <-ch.cl:
+			return // channel closed
+		case t := <-ch.setReadDl:
+			if readDlT != nil {
+				readDlT.Stop()
+				readDlT = nil
+				readDl = nil
+			}
+			ch.readDeadline = t
+			if !t.IsZero() && time.Until(t) > 0 {
+				readDlT = time.NewTimer(time.Until(t))
+				readDl = readDlT.C
+			}
+		case t := <-ch.setWriteDl:
+			if writeDlT != nil {
+				writeDlT.Stop()
+				writeDlT = nil
+				writeDl = nil
+			}
+			ch.writeDeadline = t
+			if !t.IsZero() && time.Until(t) > 0 {
+				writeDlT = time.NewTimer(time.Until(t))
+				writeDl = writeDlT.C
+			}
+		case <-readDl:
+			ch.inCond.Broadcast()
+		case <-writeDl:
+			ch.inCond.Broadcast()
+		}
+	}
 }
 
 func (ch *Channel) Read(b []byte) (n int, err error) {
@@ -67,6 +113,11 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 			return 0, io.EOF
 		}
 		if len(b) == 0 {
+			return
+		}
+
+		if !ch.readDeadline.IsZero() && time.Until(ch.readDeadline) < 0 {
+			err = ErrTimeout
 			return
 		}
 
@@ -104,6 +155,10 @@ func (ch *Channel) Write(b []byte) (int, error) {
 			b = b[int(snd):]
 			ch.s.out <- &frame{frameData, ch.ch, sB}
 			n += int(snd)
+		}
+
+		if !ch.writeDeadline.IsZero() && time.Until(ch.writeDeadline) < 0 {
+			return n, ErrTimeout
 		}
 
 		if ch.winOut == 0 {
@@ -222,13 +277,17 @@ func (ch *Channel) RemoteAddr() net.Addr {
 }
 
 func (ch *Channel) SetDeadline(t time.Time) error {
-	return errors.New("TODO")
+	ch.setReadDl <- t
+	ch.setWriteDl <- t
+	return nil
 }
 
 func (ch *Channel) SetReadDeadline(t time.Time) error {
-	return errors.New("TODO")
+	ch.setReadDl <- t
+	return nil
 }
 
 func (ch *Channel) SetWriteDeadline(t time.Time) error {
-	return errors.New("TODO")
+	ch.setWriteDl <- t
+	return nil
 }
