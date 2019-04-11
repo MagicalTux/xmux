@@ -70,10 +70,12 @@ func (s *Session) Accept() (net.Conn, error) {
 }
 
 func (s *Session) Dial(network, address string) (net.Conn, error) {
-	return s.DialChannel(network, address)
+	return s.DialChannel(network, address, true)
 }
 
-func (s *Session) DialChannel(network, address string) (*Channel, error) {
+// DialChannel will dial the requested information to the other side. If you pass false
+// for wait, then the function returns immediately, but read/write may not work immediately.
+func (s *Session) DialChannel(network, address string, wait bool) (*Channel, error) {
 	ep := []byte(network + "\x00" + address)
 
 	cid := atomic.AddUint32(&s.chId, 2) - 2
@@ -84,6 +86,10 @@ func (s *Session) DialChannel(network, address string) (*Channel, error) {
 	s.chMlk.Unlock()
 
 	s.out <- &frame{frameOpenChannel, cid, ep}
+
+	if !wait {
+		return ch, nil
+	}
 
 	err := ch.waitAccept()
 	if err != nil {
