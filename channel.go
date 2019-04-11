@@ -32,6 +32,7 @@ type Channel struct {
 	writeDeadline time.Time
 	setReadDl     chan time.Time
 	setWriteDl    chan time.Time
+	timeoutH      sync.Once
 }
 
 func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
@@ -51,8 +52,8 @@ func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
 	return res
 }
 
-// chTimeout is a goroutine that will wake channel locks upon reaching any timeout
-func (ch *Channel) chTimeout() {
+// processTimeout is a goroutine that will wake channel locks upon reaching any timeout
+func (ch *Channel) processTimeout() {
 	var readDl, writeDl <-chan time.Time
 	var readDlT, writeDlT *time.Timer
 
@@ -277,17 +278,20 @@ func (ch *Channel) RemoteAddr() net.Addr {
 }
 
 func (ch *Channel) SetDeadline(t time.Time) error {
+	go ch.timeoutH.Do(ch.processTimeout)
 	ch.setReadDl <- t
 	ch.setWriteDl <- t
 	return nil
 }
 
 func (ch *Channel) SetReadDeadline(t time.Time) error {
+	go ch.timeoutH.Do(ch.processTimeout)
 	ch.setReadDl <- t
 	return nil
 }
 
 func (ch *Channel) SetWriteDeadline(t time.Time) error {
+	go ch.timeoutH.Do(ch.processTimeout)
 	ch.setWriteDl <- t
 	return nil
 }
