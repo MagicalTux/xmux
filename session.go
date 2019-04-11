@@ -116,7 +116,6 @@ func (s *Session) readRoutine() {
 			ch, ok := s.chMap[f.ch]
 			s.chMlk.RUnlock()
 			if !ok {
-				log.Printf("xmux: received data on closed channel %d", f.ch)
 				break
 			}
 			ch.handle(f)
