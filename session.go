@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +50,25 @@ func New(s io.ReadWriter, server bool) *Session {
 	go res.readRoutine()
 
 	return res
+}
+
+func (s *Session) Accept() (net.Conn, error) {
+	c, ok := <-s.accept
+	if !ok {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.ErrClosedPipe
+	}
+	return c, nil
+}
+
+// Addr complies with interface net.Listener and returns local addr if any
+func (s *Session) Addr() net.Addr {
+	if o, ok := s.s.(interface{ LocalAddr() net.Addr }); ok {
+		return o.LocalAddr()
+	}
+	return nil // TODO return something else than nil?
 }
 
 func (s *Session) Close() error {

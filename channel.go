@@ -2,9 +2,12 @@ package xmux
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Channel struct {
@@ -13,11 +16,16 @@ type Channel struct {
 	ep            []byte
 	winIn, winOut uint32
 	cl            chan struct{} // close chan
-	inLock        sync.Mutex
-	inCond        *sync.Cond
-	closed        uint32
 
-	bufIn []byte
+	bufIn   []byte
+	inLock  sync.Mutex
+	inCond  *sync.Cond
+	outLock sync.Mutex
+	outCond *sync.Cond
+
+	laddr, raddr net.Addr
+
+	closed uint32
 }
 
 func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
@@ -29,6 +37,7 @@ func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
 	}
 
 	res.inCond = sync.NewCond(&res.inLock)
+	res.outCond = sync.NewCond(&res.outLock)
 
 	return res
 }
@@ -63,6 +72,33 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 	}
 }
 
+func (ch *Channel) Write(b []byte) (int, error) {
+	ch.outLock.Lock()
+	defer ch.outLock.Unlock()
+	var n int
+
+	for {
+		if ch.s.closed != 0 {
+			return n, io.EOF
+		}
+		if uint32(len(b)) < ch.winOut {
+			// can send the whole thing
+			ch.winOut -= uint32(len(b))
+			// TODO copy buffer?
+			ch.s.out <- &frame{frameData, ch.ch, b}
+			return n, nil
+		} else {
+			sB := b[:int(ch.winOut)]
+			b = b[int(ch.winOut):]
+			ch.winOut = 0
+			ch.s.out <- &frame{frameData, ch.ch, sB}
+			n += len(sB)
+		}
+
+		ch.outCond.Wait()
+	}
+}
+
 func (ch *Channel) handle(f *frame) {
 	switch f.code {
 	case frameOpenAck:
@@ -71,7 +107,10 @@ func (ch *Channel) handle(f *frame) {
 		if len(f.payload) != 4 {
 			return
 		}
+		ch.outLock.Lock()
+		defer ch.outLock.Unlock()
 		ch.winOut = binary.BigEndian.Uint32(f.payload)
+		ch.outCond.Broadcast()
 	case frameData:
 		if f.payload == nil {
 			return
@@ -80,7 +119,7 @@ func (ch *Channel) handle(f *frame) {
 		defer ch.inLock.Unlock()
 		ch.bufIn = append(ch.bufIn, f.payload...)
 		ch.winIn -= uint32(len(f.payload)) // TODO check overflow?
-		ch.inCond.Signal()
+		ch.inCond.Broadcast()              // broadcast in case multiple readers aren't reading much
 	case frameClose:
 		ch.Close()
 	}
@@ -109,6 +148,7 @@ func (ch *Channel) winCalc() {
 
 	ch.winCalcLk()
 }
+
 func (ch *Channel) winCalcLk() {
 	// we have the lock here
 	maxWin := ch.s.chWinSize
@@ -125,4 +165,24 @@ func (ch *Channel) winCalcLk() {
 	if ch.s.closed == 0 {
 		ch.s.out <- &frame{frameWinAdjust, ch.ch, payload}
 	}
+}
+
+func (ch *Channel) LocalAddr() net.Addr {
+	return ch.laddr
+}
+
+func (ch *Channel) RemoteAddr() net.Addr {
+	return ch.raddr
+}
+
+func (ch *Channel) SetDeadline(t time.Time) error {
+	return errors.New("TODO")
+}
+
+func (ch *Channel) SetReadDeadline(t time.Time) error {
+	return errors.New("TODO")
+}
+
+func (ch *Channel) SetWriteDeadline(t time.Time) error {
+	return errors.New("TODO")
 }
