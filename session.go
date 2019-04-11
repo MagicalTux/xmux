@@ -60,6 +60,7 @@ func (s *Session) AcceptChannel() (*Channel, error) {
 		}
 		return nil, io.ErrClosedPipe
 	}
+	s.out <- &frame{frameOpenAck, c.ch, nil}
 	return c, nil
 }
 
@@ -83,8 +84,20 @@ func (s *Session) DialChannel(network, address string) (*Channel, error) {
 
 	s.out <- &frame{frameOpenChannel, cid, ep}
 
+	err := ch.waitAccept()
+	if err != nil {
+		s.unregCh(cid)
+		return nil, err
+	}
+
 	// TODO wait for channel open response
 	return ch, nil
+}
+
+func (s *Session) unregCh(ch uint32) {
+	s.chMlk.Lock()
+	defer s.chMlk.Unlock()
+	delete(s.chMap, ch)
 }
 
 // Addr complies with interface net.Listener and returns local addr if any
@@ -102,8 +115,17 @@ func (s *Session) Close() error {
 	}
 
 	close(s.cl)
+
 	// close channels, etc
-	// TODO
+	s.chMlk.Lock()
+	for _, ch := range s.chMap {
+		// do close in separate routine because it'll need the lock we hold
+		go ch.Close()
+	}
+	s.chMlk.Unlock()
+
+	// TODO wait for group?
+
 	if cl, ok := s.s.(io.Closer); ok {
 		cl.Close()
 	}

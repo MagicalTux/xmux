@@ -1,6 +1,7 @@
 package xmux
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ type Channel struct {
 	ep            []byte
 	winIn, winOut uint32
 	cl            chan struct{} // close chan
+	accepted      bool
 
 	bufIn   []byte
 	inLock  sync.Mutex
@@ -47,12 +49,6 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 	defer ch.inLock.Unlock()
 
 	for {
-		if ch.closed != 0 {
-			return 0, io.EOF
-		}
-		if len(b) == 0 {
-			return
-		}
 		if len(ch.bufIn) > 0 {
 			copy(b, ch.bufIn)
 			if len(ch.bufIn) <= len(b) {
@@ -65,6 +61,12 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 				b = b[n:]
 			}
 			ch.winCalcLk()
+			return
+		}
+		if ch.closed != 0 {
+			return 0, io.EOF
+		}
+		if len(b) == 0 {
 			return
 		}
 
@@ -81,21 +83,47 @@ func (ch *Channel) Write(b []byte) (int, error) {
 		if ch.s.closed != 0 {
 			return n, io.EOF
 		}
-		if uint32(len(b)) < ch.winOut {
-			// can send the whole thing
-			ch.winOut -= uint32(len(b))
-			// TODO copy buffer?
-			ch.s.out <- &frame{frameData, ch.ch, b}
-			return n, nil
-		} else {
-			sB := b[:int(ch.winOut)]
-			b = b[int(ch.winOut):]
-			ch.winOut = 0
-			ch.s.out <- &frame{frameData, ch.ch, sB}
-			n += len(sB)
+
+		snd := uint32(len(b))
+		if snd > ch.winOut {
+			snd = ch.winOut
+		}
+		if snd > maxFramePayload {
+			snd = maxFramePayload
 		}
 
-		ch.outCond.Wait()
+		ch.winOut -= snd
+
+		// TODO copy buffer?
+		if uint32(len(b)) <= snd {
+			ch.s.out <- &frame{frameData, ch.ch, b}
+			n += int(snd)
+			return n, nil
+		} else {
+			sB := b[:int(snd)]
+			b = b[int(snd):]
+			ch.s.out <- &frame{frameData, ch.ch, sB}
+			n += int(snd)
+		}
+
+		if ch.winOut == 0 {
+			ch.outCond.Wait()
+		}
+	}
+}
+
+func (ch *Channel) waitAccept() error {
+	ch.inLock.Lock()
+	defer ch.inLock.Unlock()
+	// wait for frameOpenAck
+	for {
+		if ch.closed != 0 {
+			return io.ErrClosedPipe
+		}
+		if ch.accepted {
+			return nil
+		}
+		ch.inCond.Wait()
 	}
 }
 
@@ -134,6 +162,8 @@ func (ch *Channel) Close() error {
 		ch.s.out <- &frame{frameClose, ch.ch, nil}
 	}
 
+	ch.s.unregCh(ch.ch)
+
 	// this will cause io.EOF to be sent to all readers
 	ch.inCond.Broadcast()
 
@@ -161,9 +191,24 @@ func (ch *Channel) winCalcLk() {
 	ch.winIn = maxWin - uint32(len(ch.bufIn))
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, ch.winIn)
+	ch.accepted = true
 
 	if ch.s.closed == 0 {
 		ch.s.out <- &frame{frameWinAdjust, ch.ch, payload}
+	}
+	ch.inCond.Broadcast()
+}
+
+func (ch *Channel) Endpoint() (string, string) {
+	ep := bytes.SplitN(ch.ep, []byte{0}, 2)
+
+	switch len(ep) {
+	case 0:
+		return "", ""
+	case 1:
+		return string(ep[0]), ""
+	default:
+		return string(ep[0]), string(ep[1])
 	}
 }
 

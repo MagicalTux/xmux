@@ -69,15 +69,21 @@ func (f *frame) WriteTo(w io.Writer) (int64, error) {
 	binary.BigEndian.PutUint32(hdr[1:5], f.ch)
 	n := binary.PutUvarint(hdr[5:], uint64(len(f.payload)))
 
+	if len(f.payload) == 0 {
+		n2, err := w.Write(hdr[:5+n])
+		return int64(n2), err
+	}
+
+	if wb, ok := w.(interface{ WriteBuffers(v [][]byte) (int, error) }); ok {
+		n2, err := wb.WriteBuffers([][]byte{hdr, f.payload})
+		return int64(n2), err
+	}
+
 	// write
 	n2, err := w.Write(hdr[:5+n])
 	if err != nil {
 		return int64(n2), err
 	}
-	if len(f.payload) == 0 {
-		return int64(n2), nil
-	}
-
 	n3, err := w.Write(f.payload)
 	return int64(n2 + n3), err
 }
