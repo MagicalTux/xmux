@@ -19,7 +19,8 @@ type Session struct {
 	chMap map[uint32]*Channel
 	chMlk sync.RWMutex
 
-	accept chan *Channel
+	accept   chan *Channel
+	deadline atomic.Value
 
 	t         time.Time // expiration timer
 	chWinSize uint32
@@ -28,6 +29,8 @@ type Session struct {
 	cl        chan struct{} // close channel
 	err       error
 }
+
+var ErrTimeout = errors.New("xmux: timed out")
 
 // New creates a new session over a given io.ReadWriter. Both side must have
 // a different value for "server" (one must be true, the other false). If the
@@ -59,16 +62,29 @@ func New(s io.ReadWriter, server bool) *Session {
 // AcceptChannel accepts one connection from the other side and will return a
 // channel to read from.
 func (s *Session) AcceptChannel() (*Channel, error) {
-	c, ok := <-s.accept
-	if !ok {
-		if s.err != nil {
-			return nil, s.err
+	var deadline <-chan time.Time
+	if d, ok := s.deadline.Load().(time.Time); ok && !d.IsZero() {
+		timer := time.NewTimer(time.Until(d))
+		defer timer.Stop()
+		deadline = timer.C
+	}
+
+	select {
+	case c, ok := <-s.accept:
+		if !ok {
+			if s.err != nil {
+				return nil, s.err
+			}
+			return nil, io.ErrClosedPipe
 		}
+		s.out <- &frame{frameOpenAck, c.ch, nil}
+		c.winCalc()
+		return c, nil
+	case <-deadline:
+		return nil, ErrTimeout
+	case <-s.cl:
 		return nil, io.ErrClosedPipe
 	}
-	s.out <- &frame{frameOpenAck, c.ch, nil}
-	c.winCalc()
-	return c, nil
 }
 
 // Accept accepts one connection from the other side and conforms to net.Listener
@@ -114,6 +130,11 @@ func (s *Session) unregCh(ch uint32) {
 	s.chMlk.Lock()
 	defer s.chMlk.Unlock()
 	delete(s.chMap, ch)
+}
+
+func (s *Session) SetDeadline(t time.Time) error {
+	s.deadline.Store(t)
+	return nil
 }
 
 // Addr complies with interface net.Listener and returns local addr if any
