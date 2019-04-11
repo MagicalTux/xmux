@@ -29,6 +29,10 @@ type Session struct {
 	err       error
 }
 
+// New creates a new session over a given io.ReadWriter. Both side must have
+// a different value for "server" (one must be true, the other false). If the
+// connection timeouts for more than 30 seconds and up to 60 seconds, it will
+// be closed.
 func New(s io.ReadWriter, server bool) *Session {
 	res := &Session{
 		s:         s,
@@ -52,6 +56,8 @@ func New(s io.ReadWriter, server bool) *Session {
 	return res
 }
 
+// AcceptChannel accepts one connection from the other side and will return a
+// channel to read from.
 func (s *Session) AcceptChannel() (*Channel, error) {
 	c, ok := <-s.accept
 	if !ok {
@@ -65,10 +71,13 @@ func (s *Session) AcceptChannel() (*Channel, error) {
 	return c, nil
 }
 
+// Accept accepts one connection from the other side and conforms to net.Listener
+// interface, allowing usage of Session for http.Serve() and similar.
 func (s *Session) Accept() (net.Conn, error) {
 	return s.AcceptChannel()
 }
 
+// Dial will create a new channel to the other side. See DialChannel for details.
 func (s *Session) Dial(network, address string) (net.Conn, error) {
 	return s.DialChannel(network, address, true)
 }
@@ -115,13 +124,16 @@ func (s *Session) Addr() net.Addr {
 	return nil // TODO return something else than nil?
 }
 
+// Close will close all the currently open connections and send a signal to the
+// other side.
 func (s *Session) Close() error {
 	if atomic.AddUint32(&s.closed, 1) != 1 {
 		// was already closed
 		return nil
 	}
 
-	close(s.cl)
+	// it may go out, or not
+	s.out <- &frame{ctrlError, 0, []byte("connection reset by peer")}
 
 	// close channels, etc
 	s.chMlk.Lock()
@@ -132,6 +144,9 @@ func (s *Session) Close() error {
 	s.chMlk.Unlock()
 
 	// TODO wait for group?
+
+	close(s.cl)
+	close(s.out)
 
 	if cl, ok := s.s.(io.Closer); ok {
 		cl.Close()
@@ -180,7 +195,14 @@ func (s *Session) readRoutine() {
 			s.chMap[f.ch] = ch
 			s.chMlk.Unlock()
 
-			s.accept <- ch
+			select {
+			case s.accept <- ch:
+				// good
+			default:
+				// couldn't append to accept (queue is full)
+				go s.unregCh(ch.ch)
+				s.out <- &frame{frameClose, ch.ch, []byte("failed to accept connection")}
+			}
 		case frameOpenAck, frameWinAdjust, frameData, frameClose:
 			if f.ch == 0 {
 				break // nope
