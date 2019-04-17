@@ -80,6 +80,30 @@ func TestXmux(t *testing.T) {
 	if string(b[:n]) != "This is a test" {
 		t.Errorf("echo test failed, received %v", b[:n])
 	}
+
+	// random tests
+	vs := []int{5, 147, 8998, 91085, 1561, 3515, 99863, 4096, 4095, 4097, 65536, 65535, 65537}
+
+	for _, l := range vs {
+		b = make([]byte, l)
+
+		nc.Write(b)
+
+		b = make([]byte, 250000)
+		x := 0
+
+		for {
+			d, _ := nc.Read(b)
+			x += d
+			if x >= l {
+				break
+			}
+		}
+
+		if x != l {
+			t.Errorf("failed random len test: expected %d but got %d", l, x)
+		}
+	}
 }
 
 func srvTest(t *testing.T, s *Session) {

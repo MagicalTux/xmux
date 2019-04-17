@@ -187,7 +187,7 @@ func (s *Session) readRoutine() {
 			return
 		}
 
-		log.Printf("xmux: in %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
+		//log.Printf("xmux: in %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
 
 		// route/handle frame
 		switch f.code {
@@ -257,7 +257,7 @@ func (s *Session) writeRoutine() {
 				// likely a close signal
 				return
 			}
-			log.Printf("xmux: out %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
+			//log.Printf("xmux: out %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
 			f.WriteTo(s.s)
 		case <-s.cl:
 			// close signal

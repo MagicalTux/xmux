@@ -147,13 +147,15 @@ func (ch *Channel) Write(b []byte) (int, error) {
 
 		ch.winOut -= snd
 
-		// TODO copy buffer?
 		if uint32(len(b)) <= snd {
-			ch.s.out <- &frame{frameData, ch.ch, b}
+			nb := make([]byte, len(b))
+			copy(nb, b)
+			ch.s.out <- &frame{frameData, ch.ch, nb}
 			n += int(snd)
 			return n, nil
 		} else {
-			sB := b[:int(snd)]
+			sB := make([]byte, int(snd))
+			copy(sB, b)
 			b = b[int(snd):]
 			ch.s.out <- &frame{frameData, ch.ch, sB}
 			n += int(snd)
