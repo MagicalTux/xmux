@@ -257,6 +257,7 @@ func (s *Session) writeRoutine() {
 				// likely a close signal
 				return
 			}
+			log.Printf("xmux: out %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
 			f.WriteTo(s.s)
 		case <-s.cl:
 			// close signal
