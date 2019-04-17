@@ -40,7 +40,7 @@ func New(s io.ReadWriter, server bool) *Session {
 		t:         time.Now().Add(60 * time.Second),
 		srv:       server,
 		accept:    make(chan *Channel, 100),
-		chWinSize: 1048576, // default window of 1MB
+		chWinSize: 16 * 1048576, // default window of 16MB
 		chMap:     make(map[uint32]*Channel),
 		out:       make(chan *frame, 100),
 		cl:        make(chan struct{}),
