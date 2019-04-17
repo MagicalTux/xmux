@@ -97,15 +97,13 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 
 	for {
 		if len(ch.bufIn) > 0 {
-			copy(b, ch.bufIn)
-			if len(ch.bufIn) <= len(b) {
+			n = copy(b, ch.bufIn)
+			if len(ch.bufIn) <= n {
 				// copied all buf to b, remove buf
-				n = len(ch.bufIn)
 				ch.bufIn = nil
 			} else {
 				// copy what we can to b
-				n = len(b)
-				b = b[n:]
+				ch.bufIn = ch.bufIn[n:]
 			}
 			ch.winCalcLk()
 			return
@@ -137,6 +135,9 @@ func (ch *Channel) Write(b []byte) (int, error) {
 		}
 
 		snd := uint32(len(b))
+		if snd == 0 {
+			return n, nil
+		}
 		if snd > ch.winOut {
 			snd = ch.winOut
 		}
