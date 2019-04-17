@@ -98,7 +98,7 @@ func (f *frame) WriteTo(w io.Writer) (int64, error) {
 
 	// if the writer supports writing both buffers in one go, do it
 	if wb, ok := w.(interface{ WriteBuffers(v [][]byte) (int, error) }); ok {
-		n2, err := wb.WriteBuffers([][]byte{hdr, f.payload})
+		n2, err := wb.WriteBuffers([][]byte{hdr[:5+n], f.payload})
 		return int64(n2), err
 	}
 
