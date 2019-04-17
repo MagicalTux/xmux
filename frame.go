@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -26,6 +27,27 @@ type frame struct {
 	code    uint8  // code
 	ch      uint32 // channel
 	payload []byte // data
+}
+
+func frameCodeName(code uint8) string {
+	switch code {
+	case frameOpenChannel:
+		return "open"
+	case frameOpenAck:
+		return "ack"
+	case frameWinAdjust:
+		return "win"
+	case frameData:
+		return "data"
+	case frameClose:
+		return "close"
+	case ctrlKeepAlive:
+		return "ctrlKeep"
+	case ctrlError:
+		return "ctrlError"
+	default:
+		return fmt.Sprintf("unknownCode(%d)", code)
+	}
 }
 
 func readFrame(r *bufio.Reader) (*frame, error) {

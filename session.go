@@ -40,7 +40,7 @@ func New(s io.ReadWriter, server bool) *Session {
 		t:         time.Now().Add(60 * time.Second),
 		srv:       server,
 		accept:    make(chan *Channel, 100),
-		chWinSize: 1048576, // defualt window of 1MB
+		chWinSize: 1048576, // default window of 1MB
 		chMap:     make(map[uint32]*Channel),
 		out:       make(chan *frame, 100),
 		cl:        make(chan struct{}),
@@ -187,7 +187,9 @@ func (s *Session) readRoutine() {
 			return
 		}
 
-		// route/handle frame (TODO)
+		log.Printf("xmux: in %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
+
+		// route/handle frame
 		switch f.code {
 		case frameOpenChannel:
 			if f.ch == 0 {
