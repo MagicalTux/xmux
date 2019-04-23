@@ -150,14 +150,26 @@ func (ch *Channel) Write(b []byte) (int, error) {
 		if uint32(len(b)) <= snd {
 			nb := make([]byte, len(b))
 			copy(nb, b)
-			ch.s.out <- &frame{frameData, ch.ch, nb}
+			select {
+			case ch.s.out <- &frame{frameData, ch.ch, nb}:
+			case <-ch.s.cl:
+				return n, io.ErrClosedPipe
+			case <-ch.cl:
+				return n, io.ErrClosedPipe
+			}
 			n += int(snd)
 			return n, nil
 		} else {
 			sB := make([]byte, int(snd))
 			copy(sB, b)
 			b = b[int(snd):]
-			ch.s.out <- &frame{frameData, ch.ch, sB}
+			select {
+			case ch.s.out <- &frame{frameData, ch.ch, sB}:
+			case <-ch.s.cl:
+				return n, io.ErrClosedPipe
+			case <-ch.cl:
+				return n, io.ErrClosedPipe
+			}
 			n += int(snd)
 		}
 
@@ -218,7 +230,11 @@ func (ch *Channel) Close() error {
 	}
 
 	if ch.s.closed == 0 {
-		ch.s.out <- &frame{frameClose, ch.ch, nil}
+		select {
+		case ch.s.out <- &frame{frameClose, ch.ch, nil}:
+		case <-ch.s.cl:
+			return io.ErrClosedPipe
+		}
 	}
 
 	ch.s.unregCh(ch.ch)

@@ -75,7 +75,11 @@ func (s *Session) AcceptChannel() (*Channel, error) {
 			}
 			return nil, io.ErrClosedPipe
 		}
-		s.out <- &frame{frameOpenAck, c.ch, nil}
+		select {
+		case s.out <- &frame{frameOpenAck, c.ch, nil}:
+		case <-s.cl:
+			return nil, io.ErrClosedPipe
+		}
 		c.winCalc()
 		return c, nil
 	case <-deadline:
@@ -108,7 +112,11 @@ func (s *Session) DialChannel(network, address string, wait bool) (*Channel, err
 	s.chMap[cid] = ch
 	s.chMlk.Unlock()
 
-	s.out <- &frame{frameOpenChannel, cid, ep}
+	select {
+	case s.out <- &frame{frameOpenChannel, cid, ep}:
+	case <-s.cl:
+		return nil, io.ErrClosedPipe
+	}
 
 	if !wait {
 		return ch, nil
@@ -165,7 +173,6 @@ func (s *Session) Close() error {
 	// TODO wait for group?
 
 	close(s.cl)
-	close(s.out)
 
 	if cl, ok := s.s.(io.Closer); ok {
 		cl.Close()
@@ -252,11 +259,7 @@ func (s *Session) writeRoutine() {
 
 	for {
 		select {
-		case f, ok := <-s.out:
-			if !ok {
-				// likely a close signal
-				return
-			}
+		case f := <-s.out:
 			//log.Printf("xmux: out %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
 			f.WriteTo(s.s)
 		case <-s.cl:
