@@ -11,6 +11,7 @@ import (
 const (
 	frameOpenChannel = iota // open channel = connect()
 	frameOpenAck            // channel open success
+	frameOpenError          // error happened during open
 	frameWinAdjust          // adjust in window for channel
 	frameData               // sending data to channel
 	frameClose              // close channel

@@ -60,6 +60,14 @@ func New(s io.ReadWriter, server bool) *Session {
 // AcceptChannel accepts one connection from the other side and will return a
 // channel to read from.
 func (s *Session) AcceptChannel() (*Channel, error) {
+	return s.AcceptChannelCb(nil)
+}
+
+// AcceptChannelCb accepts a connection but allows executing a callback prior
+// to accepting the connection, meaning Dial() will not return until the end
+// of the callback on the other side. The callback may return an error, in which
+// case AcceptChannelCb will not return.
+func (s *Session) AcceptChannelCb(cb func(*Channel) error) (*Channel, error) {
 	var deadline <-chan time.Time
 	if d, ok := s.deadline.Load().(time.Time); ok && !d.IsZero() {
 		timer := time.NewTimer(time.Until(d))
@@ -67,25 +75,39 @@ func (s *Session) AcceptChannel() (*Channel, error) {
 		deadline = timer.C
 	}
 
-	select {
-	case c, ok := <-s.accept:
-		if !ok {
-			if s.err != nil {
-				return nil, s.err
-			}
-			return nil, io.ErrClosedPipe
-		}
+	for {
 		select {
-		case s.out <- &frame{frameOpenAck, c.ch, nil}:
+		case c, ok := <-s.accept:
+			if !ok {
+				if s.err != nil {
+					return nil, s.err
+				}
+				return nil, io.ErrClosedPipe
+			}
+			if cb != nil {
+				err := cb(c)
+				if err != nil {
+					// callback returned an error, return error and continue listening (unless we're closing)
+					select {
+					case s.out <- &frame{frameOpenError, c.ch, []byte(err.Error())}:
+					case <-s.cl:
+						return nil, io.ErrClosedPipe
+					}
+					break
+				}
+			}
+			select {
+			case s.out <- &frame{frameOpenAck, c.ch, nil}:
+			case <-s.cl:
+				return nil, io.ErrClosedPipe
+			}
+			c.winCalc()
+			return c, nil
+		case <-deadline:
+			return nil, ErrTimeout
 		case <-s.cl:
 			return nil, io.ErrClosedPipe
 		}
-		c.winCalc()
-		return c, nil
-	case <-deadline:
-		return nil, ErrTimeout
-	case <-s.cl:
-		return nil, io.ErrClosedPipe
 	}
 }
 

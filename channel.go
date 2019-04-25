@@ -3,6 +3,7 @@ package xmux
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -27,6 +28,7 @@ type Channel struct {
 	laddr, raddr net.Addr
 
 	closed uint32
+	err    error
 
 	readDeadline  time.Time
 	writeDeadline time.Time
@@ -188,6 +190,9 @@ func (ch *Channel) waitAccept() error {
 	defer ch.inLock.Unlock()
 	// wait for frameOpenAck
 	for {
+		if ch.err != nil {
+			return ch.err
+		}
 		if ch.closed != 0 {
 			return io.ErrClosedPipe
 		}
@@ -202,6 +207,11 @@ func (ch *Channel) handle(f *frame) {
 	switch f.code {
 	case frameOpenAck:
 		ch.winCalc()
+	case frameOpenError:
+		ch.inLock.Lock()
+		defer ch.inLock.Unlock()
+		ch.err = errors.New(string(f.payload))
+		ch.inCond.Broadcast()
 	case frameWinAdjust:
 		if len(f.payload) != 4 {
 			return
