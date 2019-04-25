@@ -204,6 +204,19 @@ func (ch *Channel) waitAccept() error {
 	}
 }
 
+func doResolveAddr(network, addr string) (net.Addr, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+		return net.ResolveTCPAddr(network, addr)
+	case "udp", "udp4", "udp6":
+		return net.ResolveUDPAddr(network, addr)
+	case "unix":
+		return net.ResolveUnixAddr(network, addr)
+	default:
+		return nil, net.UnknownNetworkError(network)
+	}
+}
+
 func (ch *Channel) handle(f *frame) {
 	switch f.code {
 	case frameOpenAck:
@@ -234,15 +247,15 @@ func (ch *Channel) handle(f *frame) {
 		// decode payload
 		info := strings.Split(string(f.payload), "\x00")
 		if info[0] != "" {
-			// set laddr (TODO support other than tcp)
-			a, err := net.ResolveTCPAddr(info[0], info[1])
+			// set laddr
+			a, err := doResolveAddr(info[0], info[1])
 			if err == nil {
 				ch.laddr = a
 			}
 		}
 		if info[2] != "" {
-			// set raddr (TODO support other than tcp)
-			a, err := net.ResolveTCPAddr(info[2], info[3])
+			// set raddr
+			a, err := doResolveAddr(info[2], info[3])
 			if err == nil {
 				ch.raddr = a
 			}
