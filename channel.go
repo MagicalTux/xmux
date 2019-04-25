@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -229,6 +230,23 @@ func (ch *Channel) handle(f *frame) {
 		ch.bufIn = append(ch.bufIn, f.payload...)
 		ch.winIn -= uint32(len(f.payload)) // TODO check overflow?
 		ch.inCond.Broadcast()              // broadcast in case multiple readers aren't reading much
+	case frameSetName:
+		// decode payload
+		info := strings.Split(string(f.payload), "\x00")
+		if info[0] != "" {
+			// set laddr (TODO support other than tcp)
+			a, err := net.ResolveTCPAddr(info[0], info[1])
+			if err == nil {
+				ch.laddr = a
+			}
+		}
+		if info[2] != "" {
+			// set raddr (TODO support other than tcp)
+			a, err := net.ResolveTCPAddr(info[2], info[3])
+			if err == nil {
+				ch.raddr = a
+			}
+		}
 	case frameClose:
 		ch.Close()
 	}
@@ -296,6 +314,33 @@ func (ch *Channel) Endpoint() (string, string) {
 	default:
 		return string(ep[0]), string(ep[1])
 	}
+}
+
+func (ch *Channel) SetName(local, remote net.Addr) error {
+	// send a frameSetName with local & remote info
+	var data []string
+
+	if remote != nil {
+		data = append(data, remote.Network(), remote.String())
+	} else {
+		data = append(data, "", "")
+	}
+	if local != nil {
+		data = append(data, local.Network(), local.String())
+	} else {
+		data = append(data, "", "")
+	}
+
+	select {
+	case ch.s.out <- &frame{frameSetName, ch.ch, []byte(strings.Join(data, "\x00"))}:
+	case <-ch.s.cl:
+		return io.ErrClosedPipe
+	}
+
+	ch.laddr = local
+	ch.raddr = remote
+
+	return nil
 }
 
 func (ch *Channel) LocalAddr() net.Addr {

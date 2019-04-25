@@ -15,6 +15,7 @@ const (
 	frameWinAdjust          // adjust in window for channel
 	frameData               // sending data to channel
 	frameClose              // close channel
+	frameSetName            // set name (localaddr, remoteaddr) of a channel
 
 	ctrlKeepAlive
 	ctrlError
@@ -36,12 +37,16 @@ func frameCodeName(code uint8) string {
 		return "open"
 	case frameOpenAck:
 		return "ack"
+	case frameOpenError:
+		return "refused"
 	case frameWinAdjust:
 		return "win"
 	case frameData:
 		return "data"
 	case frameClose:
 		return "close"
+	case frameSetName:
+		return "name"
 	case ctrlKeepAlive:
 		return "ctrlKeep"
 	case ctrlError:
