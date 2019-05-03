@@ -92,7 +92,7 @@ func readFrame(r *bufio.Reader) (*frame, error) {
 
 // WriteTo conforms to the appropriate go interface
 func (f *frame) WriteTo(w io.Writer) (int64, error) {
-	hdr := make([]byte, 5+binary.MaxVarintLen64)
+	hdr := make([]byte, 5+binary.MaxVarintLen64+len(f.payload))
 	hdr[0] = byte(f.code)
 	binary.BigEndian.PutUint32(hdr[1:5], f.ch)
 	n := binary.PutUvarint(hdr[5:], uint64(len(f.payload)))
@@ -102,7 +102,9 @@ func (f *frame) WriteTo(w io.Writer) (int64, error) {
 		return int64(n2), err
 	}
 
+	copy(hdr[5+n:], f.payload)
+
 	// write
-	n2, err := w.Write(append(hdr[:5+n], f.payload...))
+	n2, err := w.Write(hdr[:5+n+len(f.payload)])
 	return int64(n2), err
 }
