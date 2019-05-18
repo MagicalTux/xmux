@@ -12,7 +12,6 @@ const (
 	frameOpenChannel = iota // open channel = connect()
 	frameOpenAck            // channel open success
 	frameOpenError          // error happened during open
-	frameWinAdjust          // adjust in window for channel
 	frameData               // sending data to channel
 	frameClose              // close channel
 	frameSetName            // set name (localaddr, remoteaddr) of a channel
@@ -22,7 +21,7 @@ const (
 )
 
 const (
-	maxFramePayload = 204800
+	maxFramePayload = 65536
 )
 
 type frame struct {
@@ -39,8 +38,6 @@ func frameCodeName(code uint8) string {
 		return "ack"
 	case frameOpenError:
 		return "refused"
-	case frameWinAdjust:
-		return "win"
 	case frameData:
 		return "data"
 	case frameClose:

@@ -22,12 +22,12 @@ type Session struct {
 	accept   chan *Channel
 	deadline atomic.Value
 
-	t         time.Time // expiration timer
-	chWinSize uint32
-	closed    uint32
-	out       chan *frame
-	cl        chan struct{} // close channel
-	err       error
+	t       time.Time // expiration timer
+	closed  uint32
+	out     chan *frame
+	outData chan *frame
+	cl      chan struct{} // close channel
+	err     error
 }
 
 // New creates a new session over a given io.ReadWriter. Both side must have
@@ -36,14 +36,14 @@ type Session struct {
 // be closed.
 func New(s io.ReadWriter, server bool) *Session {
 	res := &Session{
-		s:         s,
-		t:         time.Now().Add(60 * time.Second),
-		srv:       server,
-		accept:    make(chan *Channel, 100),
-		chWinSize: 8 * 1048576, // default window of 16MB
-		chMap:     make(map[uint32]*Channel),
-		out:       make(chan *frame, 100),
-		cl:        make(chan struct{}),
+		s:       s,
+		t:       time.Now().Add(60 * time.Second),
+		srv:     server,
+		accept:  make(chan *Channel, 100),
+		chMap:   make(map[uint32]*Channel),
+		out:     make(chan *frame, 100),
+		outData: make(chan *frame),
+		cl:      make(chan struct{}),
 	}
 	if server {
 		res.chId = 2
@@ -101,7 +101,6 @@ func (s *Session) AcceptChannelCb(cb func(*Channel) error) (*Channel, error) {
 			case <-s.cl:
 				return nil, io.ErrClosedPipe
 			}
-			c.winCalc()
 			return c, nil
 		case <-deadline:
 			return nil, ErrTimeout
@@ -144,13 +143,14 @@ func (s *Session) DialChannel(network, address string, wait bool) (*Channel, err
 		return ch, nil
 	}
 
+	// wait for channel open response
 	err := ch.waitAccept()
 	if err != nil {
+		log.Printf("error in waitaccept: %s", err)
 		s.unregCh(cid)
 		return nil, err
 	}
 
-	// TODO wait for channel open response
 	return ch, nil
 }
 
@@ -253,7 +253,7 @@ func (s *Session) readRoutine() {
 				go s.unregCh(ch.ch)
 				s.out <- &frame{frameClose, ch.ch, []byte("failed to accept connection")}
 			}
-		case frameOpenAck, frameWinAdjust, frameData, frameClose:
+		case frameOpenAck, frameData, frameClose:
 			if f.ch == 0 {
 				break // nope
 			}
@@ -283,6 +283,9 @@ func (s *Session) writeRoutine() {
 		select {
 		case f := <-s.out:
 			//log.Printf("xmux: out %d %s %d", f.ch, frameCodeName(f.code), len(f.payload))
+			f.WriteTo(s.s)
+		case f := <-s.outData:
+			// outData is used for outgoing packets, to force ordering
 			f.WriteTo(s.s)
 		case <-s.cl:
 			// close signal

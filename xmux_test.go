@@ -41,7 +41,10 @@ func TestXmux(t *testing.T) {
 
 	go srvTest(t, s)
 
-	nc, _ := c.Dial("tcp", "hello")
+	nc, err := c.Dial("tcp", "hello")
+	if err != nil {
+		t.Fatalf("failed to dial: %s", err)
+	}
 	b := make([]byte, 4096)
 	n, _ := nc.Read(b)
 

@@ -2,10 +2,10 @@ package xmux
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,18 +13,16 @@ import (
 )
 
 type Channel struct {
-	s             *Session
-	ch            uint32
-	ep            []byte
-	winIn, winOut uint32
-	cl            chan struct{} // close chan
-	accepted      bool
+	s        *Session
+	ch       uint32
+	ep       []byte
+	cl       chan struct{} // close chan
+	accepted bool
 
 	bufIn   []byte
 	inLock  sync.Mutex
 	inCond  *sync.Cond
 	outLock sync.Mutex
-	outCond *sync.Cond
 
 	laddr, raddr net.Addr
 
@@ -50,7 +48,6 @@ func (s *Session) newChannel(ch uint32, ep []byte) *Channel {
 	}
 
 	res.inCond = sync.NewCond(&res.inLock)
-	res.outCond = sync.NewCond(&res.outLock)
 
 	return res
 }
@@ -108,7 +105,6 @@ func (ch *Channel) Read(b []byte) (n int, err error) {
 				// copy what we can to b
 				ch.bufIn = ch.bufIn[n:]
 			}
-			ch.winCalcLk()
 			return
 		}
 		if ch.closed != 0 {
@@ -131,58 +127,42 @@ func (ch *Channel) Write(b []byte) (int, error) {
 	ch.outLock.Lock()
 	defer ch.outLock.Unlock()
 	var n int
+	var c <-chan time.Time
+
+	if !ch.writeDeadline.IsZero() {
+		t := time.NewTimer(time.Until(ch.writeDeadline))
+		defer t.Stop()
+		c = t.C
+	}
 
 	for {
 		if ch.s.closed != 0 {
-			return n, io.EOF
+			return n, io.ErrClosedPipe
 		}
 
 		snd := uint32(len(b))
 		if snd == 0 {
 			return n, nil
 		}
-		if snd > ch.winOut {
-			snd = ch.winOut
-		}
 		if snd > maxFramePayload {
 			snd = maxFramePayload
 		}
 
-		ch.winOut -= snd
+		sB := make([]byte, snd)
+		copy(sB, b)
+		b = b[int(snd):]
 
-		if uint32(len(b)) <= snd {
-			nb := make([]byte, len(b))
-			copy(nb, b)
-			select {
-			case ch.s.out <- &frame{frameData, ch.ch, nb}:
-			case <-ch.s.cl:
-				return n, io.ErrClosedPipe
-			case <-ch.cl:
-				return n, io.ErrClosedPipe
-			}
-			n += int(snd)
-			return n, nil
-		} else {
-			sB := make([]byte, int(snd))
-			copy(sB, b)
-			b = b[int(snd):]
-			select {
-			case ch.s.out <- &frame{frameData, ch.ch, sB}:
-			case <-ch.s.cl:
-				return n, io.ErrClosedPipe
-			case <-ch.cl:
-				return n, io.ErrClosedPipe
-			}
-			n += int(snd)
-		}
-
-		if !ch.writeDeadline.IsZero() && time.Until(ch.writeDeadline) < 0 {
+		select {
+		case ch.s.outData <- &frame{frameData, ch.ch, sB}:
+			runtime.Gosched()
+		case <-ch.s.cl:
+			return n, io.ErrClosedPipe
+		case <-ch.cl:
+			return n, io.ErrClosedPipe
+		case <-c:
 			return n, ErrTimeout
 		}
-
-		if ch.winOut == 0 {
-			ch.outCond.Wait()
-		}
+		n += int(snd)
 	}
 }
 
@@ -191,14 +171,14 @@ func (ch *Channel) waitAccept() error {
 	defer ch.inLock.Unlock()
 	// wait for frameOpenAck
 	for {
+		if ch.accepted {
+			return nil
+		}
 		if ch.err != nil {
 			return ch.err
 		}
 		if ch.closed != 0 {
 			return io.ErrClosedPipe
-		}
-		if ch.accepted {
-			return nil
 		}
 		ch.inCond.Wait()
 	}
@@ -220,20 +200,13 @@ func doResolveAddr(network, addr string) (net.Addr, error) {
 func (ch *Channel) handle(f *frame) {
 	switch f.code {
 	case frameOpenAck:
-		ch.winCalc()
+		ch.accepted = true
+		ch.inCond.Broadcast()
 	case frameOpenError:
 		ch.inLock.Lock()
 		defer ch.inLock.Unlock()
 		ch.err = errors.New(string(f.payload))
 		ch.inCond.Broadcast()
-	case frameWinAdjust:
-		if len(f.payload) != 4 {
-			return
-		}
-		ch.outLock.Lock()
-		defer ch.outLock.Unlock()
-		ch.winOut += binary.BigEndian.Uint32(f.payload)
-		ch.outCond.Broadcast()
 	case frameData:
 		if f.payload == nil {
 			return
@@ -241,8 +214,7 @@ func (ch *Channel) handle(f *frame) {
 		ch.inLock.Lock()
 		defer ch.inLock.Unlock()
 		ch.bufIn = append(ch.bufIn, f.payload...)
-		ch.winIn -= uint32(len(f.payload)) // TODO check overflow?
-		ch.inCond.Broadcast()              // broadcast in case multiple readers aren't reading much
+		ch.inCond.Broadcast() // broadcast in case multiple readers aren't reading much
 	case frameSetName:
 		// decode payload
 		info := strings.Split(string(f.payload), "\x00")
@@ -286,34 +258,6 @@ func (ch *Channel) Close() error {
 	// TODO close
 	close(ch.cl)
 	return nil
-}
-
-func (ch *Channel) winCalc() {
-	ch.inLock.Lock()
-	defer ch.inLock.Unlock()
-
-	ch.winCalcLk()
-}
-
-func (ch *Channel) winCalcLk() {
-	// we have the lock here
-	maxWin := ch.s.chWinSize
-
-	if (uint32(len(ch.bufIn)) + ch.winIn) >= maxWin {
-		return
-	}
-
-	// increase winIn
-	delta := maxWin - (uint32(len(ch.bufIn)) + ch.winIn)
-	ch.winIn += delta
-	payload := make([]byte, 4)
-	binary.BigEndian.PutUint32(payload, delta)
-	ch.accepted = true
-
-	if ch.s.closed == 0 {
-		ch.s.out <- &frame{frameWinAdjust, ch.ch, payload}
-	}
-	ch.inCond.Broadcast()
 }
 
 func (ch *Channel) Endpoint() (string, string) {
